@@ -1,5 +1,5 @@
 # ---------- Build stage ----------
-FROM golang:1.22-alpine AS builder
+FROM golang:1.25-alpine AS builder
 
 # VERSION is passed via --build-arg
 ARG VERSION=unknown
