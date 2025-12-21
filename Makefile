@@ -9,17 +9,21 @@ DEV_VERSION := $(shell git describe --tags --dirty --always 2>/dev/null | sed 's
 
 REMOTE_IMAGE := $(DOCKERHUB_USER)/$(IMAGE_NAME)
 
-.PHONY: build build-dev tag push clean release test check-version show-version check-tag bump bump-minor bump-major
+.PHONY: test build-dev bump bump-minor bump-major check-version show-version clean
 
 test:
 	go test ./...
 
-# New target for local development builds
+# ⚡ Optimized: Build locally first, then Docker just copies the file.
+# This avoids downloading Go and dependencies inside the container every time.
 build-dev:
+	@echo "Building local binary for dev: $(DEV_VERSION)"
+	CGO_ENABLED=0 go build -ldflags "-s -w -X main.version=$(DEV_VERSION)" -o discord-cleanup .
 	@echo "Building dev image: $(IMAGE_NAME):$(DEV_VERSION)"
-	docker build --build-arg VERSION=$(DEV_VERSION) -t $(IMAGE_NAME):$(DEV_VERSION) .
+	docker build -t $(IMAGE_NAME):$(DEV_VERSION) .
 
-# 🚀 New target: bump the version, create a new tag, and push it
+# 🚀 Use 'make bump' to release. 
+# GoReleaser handles the production build and Docker push in CI.
 bump:
 	$(call bump_version,patch)
 
@@ -36,43 +40,15 @@ check-version:
 	else \
 		echo "✅ Using version: $(VERSION)"; \
 	fi
+
 show-version:
 	@echo "Release VERSION: $(VERSION)"
 	@echo "Dev VERSION: $(DEV_VERSION)"
 
-check-tag:
-	@command -v jq >/dev/null || { echo "❌ jq is required"; exit 1; }
-	@command -v curl >/dev/null || { echo "❌ curl is required"; exit 1; }
-	@echo "🔍 Checking if Docker tag $(VERSION) already exists..."
-	@TAG_EXISTS=$$(curl -s https://hub.docker.com/v2/repositories/$(REMOTE_IMAGE)/tags/$(VERSION)/ | jq -r '.name // empty'); \
-	if [ "$$TAG_EXISTS" = "$(VERSION)" ]; then \
-		echo "❌ Tag $(VERSION) already exists on Docker Hub. Aborting."; \
-		exit 1; \
-	else \
-		echo "✅ Tag $(VERSION) is available."; \
-	fi
-
-# This 'build' is part of the 'release' pipeline and must use the strict VERSION
-build:
-	docker build --build-arg VERSION=$(VERSION) -t $(IMAGE_NAME):$(VERSION) .
-
-tag:
-	docker tag $(IMAGE_NAME):$(VERSION) $(REMOTE_IMAGE):$(VERSION)
-	docker tag $(IMAGE_NAME):$(VERSION) $(REMOTE_IMAGE):latest
-
-push:
-	docker push $(REMOTE_IMAGE):$(VERSION)
-	docker push $(REMOTE_IMAGE):latest
-
 clean:
-	-docker rmi $(IMAGE_NAME):$(VERSION) || true
-	-docker rmi $(REMOTE_IMAGE):$(VERSION) || true
-	-docker rmi $(REMOTE_IMAGE):latest || true
-	# Also clean up the dev image
+	rm -f discord-cleanup
 	-docker rmi $(IMAGE_NAME):$(DEV_VERSION) || true
-
-
-release: check-version check-tag test build tag push clean
+	-docker rmi $(REMOTE_IMAGE):latest || true
 
 
 define bump_version
