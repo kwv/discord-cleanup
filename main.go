@@ -52,7 +52,7 @@ func main() {
 	if err = dg.Open(); err != nil {
 		log.Fatalf("error opening connection: %v", err)
 	}
-	defer dg.Close()
+	defer func() { _ = dg.Close() }()
 
 	if mode == "oneshot" {
 		log.Println("Running in oneshot mode")
