@@ -1,6 +1,6 @@
 module github.com/kwv/discord-cleanup
 
-go 1.18
+go 1.25
 
 require github.com/bwmarrin/discordgo v0.29.0
 
