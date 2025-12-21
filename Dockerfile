@@ -1,16 +1,6 @@
-# ---------- Build stage ----------
-FROM golang:1.25-alpine AS builder
+# This Dockerfile is optimized for GoReleaser and fast local development.
+# It expects the 'discord-cleanup' binary to be present in the build context.
 
-# VERSION is passed via --build-arg
-ARG VERSION=unknown
-
-WORKDIR /app
-COPY go.mod go.sum ./
-RUN go mod download
-COPY . .
-RUN CGO_ENABLED=0 GOOS=linux go build -ldflags "-s -w -X main.version=${VERSION}" -o discord-cleanup
-
-# ---------- Runtime stage ----------
 FROM gcr.io/distroless/static-debian12
-COPY --from=builder /app/discord-cleanup /discord-cleanup
+COPY discord-cleanup /discord-cleanup
 ENTRYPOINT ["/discord-cleanup"]
