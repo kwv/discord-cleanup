@@ -22,12 +22,14 @@ builds:
 
 dockers_v2:
   - id: discord-cleanup
-    image_templates:
-      - "kwv4/discord-cleanup:{{ .Version }}"
-      - "kwv4/discord-cleanup:latest"
+    images:
+      - "kwv4/discord-cleanup"
+    tags:
+      - "{{ .Version }}"
+      - "latest"
     dockerfile: Dockerfile
-    build_flag_templates:
-      - "--label=org.opencontainers.image.version={{ .Version }}"
+    labels:
+      org.opencontainers.image.version: "{{ .Version }}"
     platforms:
       - linux/amd64
       - linux/arm64
