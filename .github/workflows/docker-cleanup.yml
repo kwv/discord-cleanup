@@ -42,45 +42,65 @@ jobs:
           DOCKER_PASSWORD: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           set -e
-          echo " Starting cleanup for $NAMESPACE/$REPO"
+          
+          echo "🚀 Starting synchronized cleanup for $NAMESPACE/$REPO"
+          echo "🔹 KEEP_RECENT: $KEEP_RECENT"
+          echo "🔹 DRY_RUN: $DRY_RUN"
+          
+          # 1. Authenticate with Docker Hub
           TOKEN=$(curl -s -H "Content-Type: application/json" -X POST -d '{"username": "'${DOCKER_USERNAME}'", "password": "'${DOCKER_PASSWORD}'"}' https://hub.docker.com/v2/users/login/ | jq -r .token)
+          if [ "$TOKEN" == "null" ] || [ -z "$TOKEN" ]; then echo "::error::Failed to authenticate"; exit 1; fi
+
+          # 2. Get Version Info from Git (Primary Source for releases)
+          echo "📊 Analyzing Git tags..."
+          GIT_VERSION_TAGS=$(git tag --sort=-v:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true)
+          VERSION_TAGS_TO_KEEP=$(echo "$GIT_VERSION_TAGS" | head -n "$KEEP_RECENT")
+          
+          # 3. Get Version Info from Docker Hub
+          echo "📊 Analyzing Docker Hub tags..."
           TAGS_JSON=$(curl -s -H "Authorization: JWT $TOKEN" "https://hub.docker.com/v2/repositories/$NAMESPACE/$REPO/tags/?page_size=100")
-          LATEST_DIGEST=$(echo "$TAGS_JSON" | jq -r '.results[] | select(.name == "latest") | .images[0].digest')
-          ALL_TAGS=$(echo "$TAGS_JSON" | jq -r '.results[] | select(.name | test("^(latest|stable|dev)$") | not) | "\(.name)|\(.last_updated)|\(.images[0].digest)"' | sort -t "|" -k2 -r)
-          TAG_PLAN=""
-          KEPT_DIGESTS="$LATEST_DIGEST"
-          COUNT=0
-          IFS=$'\n'
-          for line in $ALL_TAGS; do
-            TAG_NAME=$(echo "$line" | cut -d "|" -f 1)
-            TAG_DIGEST=$(echo "$line" | cut -d "|" -f 3)
+          DOCKER_TAGS=$(echo "$TAGS_JSON" | jq -r '.results[].name')
+          
+          # 4. Consolidate list of all unique version tags (v*) from both systems
+          ALL_VERSION_TAGS=$(printf "%s\n%s" "$(echo "$GIT_VERSION_TAGS")" "$(echo "$DOCKER_TAGS")" | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | sort -u || true)
+
+          echo "--------------------------------------------------------------------------------"
+          printf "%-25s %-10s %-20s\n" "TAG" "STATUS" "PLAN"
+          echo "--------------------------------------------------------------------------------"
+
+          for tag in $ALL_VERSION_TAGS; do
             ACTION="DELETE"
-            if [ "$TAG_DIGEST" == "$LATEST_DIGEST" ]; then
-                ACTION="KEEP"
-            elif [ "$COUNT" -lt "$KEEP_RECENT" ]; then
-                ACTION="KEEP"
-                COUNT=$((COUNT+1))
+            REASON="Old version"
+            
+            if echo "$VERSION_TAGS_TO_KEEP" | grep -qX "$tag"; then
+              ACTION="KEEP"
+              REASON="Recent release"
             fi
-            if [ "$ACTION" == "KEEP" ]; then
-                if [[ "$KEPT_DIGESTS" != *"$TAG_DIGEST"* ]]; then
-                    KEPT_DIGESTS="${KEPT_DIGESTS} ${TAG_DIGEST}"
-                fi
+            
+            if [[ "$tag" =~ $PROTECTED_REGEX ]]; then
+              ACTION="KEEP"
+              REASON="Protected"
             fi
-            TAG_PLAN="${TAG_PLAN}${TAG_NAME}|${ACTION}\n"
-          done
-          printf "$TAG_PLAN" | while IFS= read -r line; do
-            if [ -z "$line" ]; then continue; fi
-            TAG_NAME=$(echo "$line" | cut -d "|" -f 1)
-            ACTION=$(echo "$line" | cut -d "|" -f 2)
+
+            printf "%-25s %-10s %-20s\n" "$tag" "$ACTION" "$REASON"
+
             if [ "$ACTION" == "DELETE" ]; then
-                if [ "$DRY_RUN" == "true" ]; then
-                    echo " [DRY RUN] Would delete $TAG_NAME"
-                else
-                    curl -s -X DELETE -H "Authorization: JWT $TOKEN" "https://hub.docker.com/v2/repositories/$NAMESPACE/$REPO/tags/$TAG_NAME/"
-                    if git rev-parse "$TAG_NAME" >/dev/null 2>&1; then
-                        git tag -d "$TAG_NAME"
-                        git push origin --delete "$TAG_NAME" || true
-                    fi
+              if [ "$DRY_RUN" == "true" ]; then
+                echo "   [DRY RUN] Would delete $tag from Docker Hub and Git"
+              else
+                # Delete from Docker Hub
+                if echo "$DOCKER_TAGS" | grep -qX "$tag"; then
+                  echo "   🗑️ Deleting Docker tag: $tag"
+                  curl -s -X DELETE -H "Authorization: JWT $TOKEN" "https://hub.docker.com/v2/repositories/$NAMESPACE/$REPO/tags/$tag/" > /dev/null
                 fi
+                # Delete from Git
+                if git rev-parse "$tag" >/dev/null 2>&1; then
+                  echo "   🗑️ Deleting Git tag: $tag"
+                  git tag -d "$tag" > /dev/null
+                  git push origin --delete "$tag" > /dev/null || echo "   ⚠️ Git push delete failed (tag might be gone)"
+                fi
+              fi
             fi
           done
+          echo "--------------------------------------------------------------------------------"
+          echo "✅ Cleanup plan complete."
